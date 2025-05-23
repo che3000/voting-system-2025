@@ -174,14 +174,26 @@ sudo systemctl restart cloudflared
 
 ---
 
-### ✅ 6. 測試 Tunnel + Cloudflare DNS 正常運作
+### ✅ 6. Cloudflare DNS 記錄設定
+
+1. 打開cloudflare儀錶板
+2. 選取左方 DNS > 紀錄
+3. 新增紀錄
+   - 類型：CNAME
+   - 名稱：@
+   - 目標：<你的 tunnel id>.cfargotunnel.com
+   - Proxy 狀態：True
+
+---
+
+### ✅ 7. 測試 Tunnel + Cloudflare DNS 正常運作
 
 打開瀏覽器進入 https://<你的網域>
 應該會正確跳轉並看到前端介面（如登入畫面）
 
 ---
 
-### ✅ 7. 移除 GCP 公網 port，僅由 Cloudflare 控管
+### ✅ 8. 移除 GCP 公網 port，僅由 Cloudflare 控管
 
 打開 GCP > VPC 網路 > 防火牆規則  
 刪除以下規則（如存在）：
