@@ -176,7 +176,7 @@ sudo systemctl restart cloudflared
 
 ### ✅ 6. 測試 Tunnel + Cloudflare DNS 正常運作
 
-打開瀏覽器進入 https://che3000s.com  
+打開瀏覽器進入 https://<你的網域>
 應該會正確跳轉並看到前端介面（如登入畫面）
 
 ---
