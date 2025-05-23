@@ -225,3 +225,7 @@ pm2 startup
 
 - 後端環境變數建議以 `.env` 管理
 - 預設管理員帳號請自行從資料庫 `users` 表中查詢
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](./LICENSE) file for details.
