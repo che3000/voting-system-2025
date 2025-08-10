@@ -102,7 +102,7 @@ const checkSuperAdminExists = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const userId = req.params.id;
-    const { username, password, party, committee, role } = req.body;
+    const { username, chinese_name, password, party, committee, role } = req.body;
 
     // 先取得目標用戶目前的角色
     const [targetRows] = await db.query("SELECT role FROM users WHERE id = ?", [userId]);
@@ -129,6 +129,10 @@ const updateUser = async (req, res) => {
     if (username) {
       updateFields.push('username = ?');
       values.push(username);
+    }
+    if (chinese_name) {
+      updateFields.push('chinese_name = ?');
+      values.push(chinese_name);
     }
     if (password) {
       const password_hash = await bcrypt.hash(password, 10);
