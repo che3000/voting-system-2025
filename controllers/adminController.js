@@ -200,6 +200,10 @@ const setupSuperAdmin = async (req, res) => {
 const uploadUsersCSV = (req, res) => {
   // 使用 multer 處理單一檔案上傳
   upload.single('file')(req, res, (err) => {
+    const fs = require('fs');
+    const csv = require('csv-parser');
+    const path = require('path');
+
     if (err) {
       console.error('Multer Error:', err);
       return res.status(500).json({ message: '檔案上傳失敗' });
@@ -207,44 +211,123 @@ const uploadUsersCSV = (req, res) => {
     if (!req.file) {
       return res.status(400).json({ message: '未上傳檔案' });
     }
+
+    const tmpPath = req.file.path;
+
+    // 角色正規化（支援中英文、大小寫、去 BOM/空白）
+    const normalizeRole = (raw) => {
+      const s = (raw ?? '').toString().replace(/^\uFEFF/, '').trim();
+      const lower = s.toLowerCase();
+      const map = {
+        // 中文
+        '一般委員': 'user',
+        '國會媒體': 'press',
+        '管理員': 'admin',
+        '超級管理員': 'superadmin',
+        // 英文（不分大小寫）
+        'user': 'user',
+        'press': 'press',
+        'admin': 'admin',
+        'superadmin': 'superadmin',
+      };
+      return map[s] || map[lower] || null;
+    };
+
+    // 欄位清洗：去 BOM 與前後空白
+    const clean = (v) =>
+      v == null ? null : v.toString().replace(/^\uFEFF/, '').trim();
+
     const results = [];
-    const fs = require('fs');
-    fs.createReadStream(req.file.path)
-      .pipe(csv())
+
+    const rows = [];
+    fs.createReadStream(tmpPath)
+      .pipe(csv({
+        mapHeaders: ({ header }) => header.replace(/^\uFEFF/, '').trim(), // 清 BOM/空白
+      }))
       .on('data', (data) => {
-        results.push(data);
+        // 統一清洗每個欄位
+        const row = {};
+        for (const k of Object.keys(data)) row[k] = clean(data[k]);
+        rows.push(row);
       })
       .on('end', async () => {
-        // 刪除暫存檔案
-        fs.unlinkSync(req.file.path);
+        // 檔案用完就先刪
+        try { fs.unlinkSync(tmpPath); } catch (_) {}
+
+        if (!rows.length) {
+          return res.status(400).json({ message: 'CSV 無資料或標頭不正確' });
+        }
+
+        let success = 0, failed = 0;
+
         try {
-          for (const row of results) {
-            // 假設 CSV 欄位：role, username, chinese_name, password, party, committee
-            const { role, username, chinese_name, password, party, committee } = row;
-            const roleMapping = {
-              "一般委員": "user",
-              "國會媒體": "press",
-              "管理員": "admin",
-              "超級管理員": "superadmin"
-            };
-            const backendRole = roleMapping[role] || 'user';
+          for (let i = 0; i < rows.length; i++) {
+            const rowNum = i + 2; // 第 1 列通常是標頭
+            const { role, username, chinese_name, password, party, committee } = rows[i];
+
+            // 驗證
+            const backendRole = normalizeRole(role);
+            const errs = [];
+            if (!backendRole) errs.push(`未知的 role: "${role}"（請用 一般委員/國會媒體/管理員/超級管理員 或 user/press/admin/superadmin）`);
+            if (!username) errs.push('缺少 username');
+            if (!password) errs.push('缺少 password');
+
+            if (errs.length) {
+              failed++;
+              results.push({ row: rowNum, username, status: 'failed', errors: errs });
+              continue;
+            }
+
+            // user 才保留群組欄位
             const newParty = backendRole === 'user' ? party : null;
             const newCommittee = backendRole === 'user' ? committee : null;
-            const password_hash = await bcrypt.hash(password, 10);
-            await db.query(
-              'INSERT INTO users (username, chinese_name, password_hash, party, committee, role) VALUES (?, ?, ?, ?, ?, ?)',
-              [username, chinese_name, password_hash, newParty, newCommittee, backendRole]
-            );
+
+            try {
+              const password_hash = await bcrypt.hash(password, 10);
+              await db.query(
+                'INSERT INTO users (username, chinese_name, password_hash, party, committee, role) VALUES (?, ?, ?, ?, ?, ?)',
+                [username, chinese_name || null, password_hash, newParty, newCommittee, backendRole]
+              );
+
+              success++;
+              results.push({ row: rowNum, username, role: backendRole, status: 'ok' });
+            } catch (e) {
+              failed++;
+              const dup = (e && e.code === 'ER_DUP_ENTRY') || (e && e.errno === 1062);
+              results.push({
+                row: rowNum,
+                username,
+                role: backendRole,
+                status: 'failed',
+                errors: [dup ? 'username 已存在（重複）' : (e.message || '資料庫錯誤')],
+              });
+            }
           }
-          res.status(201).json({ message: 'CSV 上傳成功，帳戶已建立' });
+
+          const payload = {
+            message: failed ? '部分失敗，請檢查 results' : 'CSV 上傳成功，帳戶已建立',
+            total: rows.length,
+            success,
+            failed,
+            results,
+            note: '只有 role=user 會保留 party/committee，其餘角色自動存 null',
+            roleHint: 'role 請用：一般委員 / 國會媒體 / 管理員 / 超級管理員 或 user / press / admin / superadmin',
+          };
+
+          return res.status(failed ? 207 : 201).json(payload);
         } catch (error) {
           console.error('CSV 解析或新增帳戶錯誤：', error);
-          res.status(500).json({ message: '批次建立用戶失敗' });
+          return res.status(500).json({ message: '批次建立用戶失敗' });
         }
+      })
+      .on('error', (e) => {
+        try { fs.unlinkSync(tmpPath); } catch (_) {}
+        console.error('CSV 讀取失敗：', e);
+        return res.status(400).json({ message: 'CSV 讀取失敗，請確認檔案格式' });
       });
   });
 };
-console.log("adminController uploadUsersCSV:", uploadUsersCSV);
+
 module.exports = {
   createUser,
   getUsers,
